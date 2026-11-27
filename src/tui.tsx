@@ -4,6 +4,9 @@ import { createCollector } from "./stats/collect"
 import { parseOptions } from "./options"
 import type { SystemStats } from "./types"
 import { MonitorView } from "./view"
+import { collectStrata, remoteOptions } from "./strata"
+import type { Result, RemoteOptions } from "./strata"
+import { StrataView } from "./strata-view"
 
 const ID = "opencode-system-monitor"
 const EMPTY: SystemStats = { cpu: null, ram: null, disk: null, gpu: null, swap: null }
@@ -13,6 +16,30 @@ const EMPTY: SystemStats = { cpu: null, ram: null, disk: null, gpu: null, swap: 
 const plugin = {
   id: ID,
   setup(context) {
+    // Explicit remote mode; never fall back to local metrics.
+    let remote: RemoteOptions | null
+    try { remote = remoteOptions(context.options) } catch {
+      return context.ui.slot({ append: "sidebar.content", render: () => <StrataView theme={context.theme} result={() => ({ status: "Invalid remote config", snapshot: null })} /> })
+    }
+    if (remote) {
+      const config = remote
+      const [result, setResult] = createSignal<Result>({ status: "Connecting", snapshot: null })
+      const controller = new AbortController()
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const tick = async () => {
+        try {
+          const next = await collectStrata(config, controller.signal)
+          if (!controller.signal.aborted) setResult(next)
+        } catch {
+          if (!controller.signal.aborted) setResult({ status: "Offline / invalid data", snapshot: null })
+        } finally {
+          if (!controller.signal.aborted) timer = setTimeout(() => { void tick() }, config.refreshMs)
+        }
+      }
+      const remove = context.ui.slot({ append: "sidebar.content", render: () => <StrataView theme={context.theme} result={result} /> })
+      void tick()
+      return () => { controller.abort(); if (timer !== undefined) clearTimeout(timer); remove() }
+    }
     const options = parseOptions(context.options)
     const collector = createCollector({}, { diskPath: options.diskPath, gpuIndex: options.gpuIndex })
     const [stats, setStats] = createSignal<SystemStats>(EMPTY)
