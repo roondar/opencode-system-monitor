@@ -1,5 +1,7 @@
 # opencode-system-monitor
 
+This fork adds an opt-in [remote Strata telemetry mode](STRATA.md). The original local mode is unchanged; no-network claims below apply only to local mode.
+
 **A cross-platform system monitor plugin for the OpenCode TUI sidebar (Linux, macOS, Windows) — live CPU, RAM, disk, NVIDIA GPU, VRAM and swap usage bars, btop-style, themed by your OpenCode theme.**
 
 [![npm version](https://img.shields.io/npm/v/opencode-system-monitor.svg)](https://www.npmjs.com/package/opencode-system-monitor)

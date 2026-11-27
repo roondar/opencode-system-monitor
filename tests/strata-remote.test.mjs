@@ -1,0 +1,18 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { parseSnapshot, remoteOptions, collectStrata } from '../src/strata.ts'
+const GiB = 2 ** 30
+const fixture = { schema_version: 1, model: { id: 'qwen\u001b[31m', loaded: true, context: 524288 }, ram: { used: 32*GiB, total: 64*GiB }, devices: [{ index: 0, name: 'AMD', util: 0, mem_used: 12*GiB, mem_total: 16*GiB, temp: 65, power: 120 }], rates: { answer_tok_s: 38.5, prefill_tok_s: 900 }, work: { active: 1, queued: 0 } }
+const options = remoteOptions({ source: 'strata' }, {})
+const env = { STRATA_MONITOR_KEY: 'test-only' }
+const json = (v, status=200) => new Response(JSON.stringify(v), { status, headers: { 'content-type': 'application/json' } })
+test('real contract names and zero semantics', () => { const s = parseSnapshot(fixture); assert.equal(s.ram.percent, 50); assert.equal(s.devices[0].vram.percent, 75); assert.equal(s.devices[0].util, 0); assert.equal(s.decode, 38.5); assert.equal(s.queued, 0); assert.ok(!s.model.includes('\u001b')) })
+test('missing metrics are not zero', () => { const s = parseSnapshot({schema_version:1}); assert.equal(s.ram.percent,null); assert.equal(s.decode,null); assert.deepEqual(s.devices,[]) })
+test('schema mismatch/status only rejected', () => { assert.throws(()=>parseSnapshot({schema_version:2})); assert.throws(()=>parseSnapshot({schema_version:1,source:'status-only'})) })
+test('selected device order and duplicate readings', () => { const s = parseSnapshot({...fixture, topology:{selected_devices:[3,0]}, devices:[fixture.devices[0],fixture.devices[0]]}); assert.deepEqual(s.devices.map(d=>[d.index,d.util]), [[3,null],[0,null]]) })
+test('remote config safe defaults and no cleartext remote', () => { assert.equal(remoteOptions({},{}),null); assert.equal(options.refreshMs,2000); assert.throws(()=>remoteOptions({source:'strata',endpoint:'http://192.168.1.142:8080/v1/telemetry'},{})); assert.throws(()=>remoteOptions({source:'strata',endpoint:'https://x/v1/telemetry?secret=a'},{})); assert.equal(remoteOptions({source:'strata',endpoint:'https://x/v1/telemetry',refreshMs:50},{}).refreshMs,1000) })
+test('authenticated GET; redirects blocked', async()=>{const r=await collectStrata(options,undefined,async(url,init)=>{assert.equal(url,options.endpoint);assert.equal(init.method,'GET');assert.equal(init.redirect,'error');assert.equal(init.headers.Authorization,'Bearer test-only');return json(fixture)},env);assert.equal(r.status,'Online');assert.equal(r.snapshot.decode,38.5)})
+test('401, 403, 404 no fallback', async()=>{for(const status of [401,403,404]){let calls=0;const r=await collectStrata(options,undefined,async()=>{calls++;return json({},status)},env);assert.equal(calls,1);assert.equal(r.snapshot,null);assert.equal(r.status,status===404?'API v1 unavailable':'Auth denied')}})
+test('missing key does not call server',async()=>{let calls=0;const r=await collectStrata(options,undefined,async()=>{calls++;return json(fixture)},{});assert.equal(calls,0);assert.equal(r.snapshot,null)})
+test('malformed and oversized payloads',async()=>{for(const response of [new Response('not json',{headers:{'content-type':'application/json'}}),new Response('x'.repeat(2*1024*1024+1),{headers:{'content-type':'application/json'}})]){assert.equal((await collectStrata(options,undefined,async()=>response,env)).snapshot,null)}})
+test('failed connection and cancellation clear snapshot',async()=>{const c=new AbortController();c.abort();assert.equal((await collectStrata(options,c.signal,async()=>{throw Error('private detail')},env)).snapshot,null);assert.equal((await collectStrata(options,undefined,async()=>{throw Error('private detail')},env)).status,'Offline / invalid data')})
