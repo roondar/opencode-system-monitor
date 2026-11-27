@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseSnapshot, remoteOptions, collectStrata } from '../src/strata.ts'
+import { parseSnapshot, parseMetrics, remoteOptions, collectStrata } from '../src/strata.ts'
 const GiB = 2 ** 30
 const fixture = { schema_version: 1, model: { id: 'qwen\u001b[31m', loaded: true, context: 524288 }, ram: { used: 32*GiB, total: 64*GiB }, devices: [{ index: 0, name: 'AMD', util: 0, mem_used: 12*GiB, mem_total: 16*GiB, temp: 65, power: 120 }], rates: { answer_tok_s: 38.5, prefill_tok_s: 900 }, work: { active: 1, queued: 0 } }
 const options = remoteOptions({ source: 'strata' }, {})
@@ -16,3 +16,10 @@ test('401, 403, 404 no fallback', async()=>{for(const status of [401,403,404]){l
 test('missing key does not call server',async()=>{let calls=0;const r=await collectStrata(options,undefined,async()=>{calls++;return json(fixture)},{});assert.equal(calls,0);assert.equal(r.snapshot,null)})
 test('malformed and oversized payloads',async()=>{for(const response of [new Response('not json',{headers:{'content-type':'application/json'}}),new Response('x'.repeat(2*1024*1024+1),{headers:{'content-type':'application/json'}})]){assert.equal((await collectStrata(options,undefined,async()=>response,env)).snapshot,null)}})
 test('failed connection and cancellation clear snapshot',async()=>{const c=new AbortController();c.abort();assert.equal((await collectStrata(options,c.signal,async()=>{throw Error('private detail')},env)).snapshot,null);assert.equal((await collectStrata(options,undefined,async()=>{throw Error('private detail')},env)).status,'Offline / invalid data')})
+
+const legacy = { engine: { model: 'example-model', max_context: 524288 }, live: { state: 'generating', phase: 'thinking', queued: 0, prompt_tokens: 200000, reused: 199000, tok_s: 64, prefill_tok_s_mean: 618 }, hardware: { cpu: 58.7, gpu_util: 98, gpu_mem_used: 15*GiB, gpu_mem_total: 16*GiB, gpu_temp: 59, gpu_power: 175, ram_used: 48*GiB, ram_total: 64*GiB }, hardware_static: { gpu_count: 1, gpu_name: 'AMD' } }
+test('legacy dashboard CPU, prompt and cache reuse', () => { const s=parseMetrics(legacy); assert.equal(s.cpu,58.7); assert.equal(s.prompt,200000); assert.equal(s.reused,199000); assert.equal(s.context,524288); assert.equal(s.ram.percent,75); assert.equal(s.devices[0].util,98); assert.equal(s.decode,64); assert.equal(s.prefill,618); assert.equal(s.active,null) })
+test('legacy idle does not show stale live rates', () => { const s=parseMetrics({...legacy,live:{...legacy.live,state:'idle'}}); assert.equal(s.prompt,null); assert.equal(s.reused,null); assert.equal(s.decode,null); assert.equal(s.prefill,null) })
+test('legacy aggregate is not attributed to multi-GPU or unknown count', () => { for(const count of [2,undefined]) assert.deepEqual(parseMetrics({...legacy,hardware_static:{gpu_count:count}}).devices,[]) })
+test('explicit legacy endpoint chooses inference credential and parser', async()=>{ const o=remoteOptions({source:'strata',endpoint:'http://127.0.0.1:18080/metrics'},{}); assert.equal(o.keyEnv,'STRATA_API_KEY'); const r=await collectStrata(o,undefined,async(url,init)=>{assert.equal(url,o.endpoint);assert.equal(init.headers.Authorization,'Bearer fixture-key');return json(legacy)},{STRATA_API_KEY:'fixture-key'}); assert.equal(r.snapshot.cpu,58.7) })
+test('legacy invalid payload and v1 schema cannot masquerade as metrics',()=>{assert.throws(()=>parseMetrics({}));assert.throws(()=>parseMetrics({...legacy,schema_version:1}));assert.equal(parseMetrics({...legacy,hardware:{cpu:101}}).cpu,null)})

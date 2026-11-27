@@ -23,6 +23,7 @@ export function StrataView(props: { theme: unknown; result: () => Result }) {
     <Show when={props.result().snapshot}>{(s) => <>
       <text fg={c().muted}>{(s().model || 'Model —').slice(0, 27)}</text>
       <text fg={c().muted}>Model {s().loaded === null ? '—' : s().loaded ? 'loaded' : 'not loaded'} · {tokenCount(s().context)} max</text>
+      <Show when={s().source === "metrics"}><Bar label="CPU" percent={s().cpu} kind="cpu" /></Show>
       <Bar label="RAM" percent={s().ram.percent} kind="ram" />
       <text fg={c().muted}>{gib(s().ram)}</text>
       <For each={s().devices.slice(0, 4)}>{(d) => <>
@@ -34,6 +35,12 @@ export function StrataView(props: { theme: unknown; result: () => Result }) {
       </>}</For>
       <Show when={s().devices.length === 0}><text fg={c().muted}>GPU telemetry unavailable</text></Show>
       <Show when={s().devices.length > 4}><text fg={c().muted}>+{s().devices.length - 4} devices</text></Show>
+      <Show when={s().prompt !== null}>
+        <Bar label="CTX" percent={s().context !== null && s().context! > 0 && s().prompt! <= s().context! ? 100 * s().prompt! / s().context! : null} kind="ram" />
+        <text fg={c().muted}>Prompt {tokenCount(s().prompt)}/{tokenCount(s().context)}</text>
+        <text fg={c().muted}>Reused {s().reused === null || !s().prompt ? '—' : (100 * s().reused! / s().prompt!).toFixed(1) + '%'}</text>
+      </Show>
+      <Show when={s().phase}><text fg={c().muted}>{s().phase}</text></Show>
       <text fg={c().base}>Decode  {fmt(s().decode, 1)} t/s</text>
       <text fg={c().base}>Prefill {fmt(s().prefill, 1)} t/s</text>
       <text fg={c().muted}>Active {fmt(s().active)} · Queue {fmt(s().queued)}</text>
